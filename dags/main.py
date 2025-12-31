@@ -1,6 +1,7 @@
 from airflow import DAG
 import pendulum
 from datetime import datetime, timedelta
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from api.video_stats import (
     get_playlist_id, 
     get_video_ids, 
@@ -48,33 +49,43 @@ with DAG(
     extract_data = extract_video_data(video_ids)
     save_to_json_task = save_to_json(extract_data)
 
+    trigger_update_db = TriggerDagRunOperator (
+        task_id = "trigger_update_db",
+        trigger_dag_id = "update_db"
+    )
+
     # Define Dependencies
-    playlist_id >> video_ids >> extract_data >> save_to_json_task
+    playlist_id >> video_ids >> extract_data >> save_to_json_task >> trigger_update_db
 
 # DAG 2: update_db
 with DAG(
     dag_id="update_db",
     default_args=default_args,
     description="DAG to process JSON file and insert data into both staging and core schemas",
-    schedule="0 15 * * *",
+    schedule=None,
     catchup=False,
-) as dag_produce:
+) as dag_update:
 
     # Define tasks
     update_staging_task = staging_table()
     update_core_task = core_table()
 
+    trigger_data_quality = TriggerDagRunOperator (
+        task_id = "trigger_data_quality",
+        trigger_dag_id = "data_quality"
+    )
+
     # Define Dependencies
-    update_staging_task >> update_core_task
+    update_staging_task >> update_core_task >> trigger_data_quality
 
 # DAG 3: Data Quality Check with SODA
 with DAG(
     dag_id="data_quality",
     default_args=default_args,
     description="DAG to check the data quality on both layers in the database",
-    schedule="0 16 * * *",
+    schedule=None,
     catchup=False,
-) as dag_produce:
+) as dag_quality:
 
     # Define tasks
     soda_validate_staging = yt_elt_data_quality(staging_schema)
